@@ -658,7 +658,19 @@ class QQMusicAPI:
             for quality in self.file_config.keys()
         ]
         results = await asyncio.gather(*tasks)
-        return {quality: url for quality, url in results if url}
+        urls = {quality: url for quality, url in results if url}
+        # If all qualities failed, attach vkey diagnostics so the client can show a reason
+        if not urls:
+            failed = {}
+            reason = None
+            for quality, url in results:
+                if not url:
+                    vk = getattr(self, f"_last_vkey_{quality}", None)
+                    failed[quality] = vk
+                    if vk and reason is None:
+                        reason = self._vkey_reason(vk)
+            urls["_vkey_diag"] = {"uin": uin, "guid": guid, "failed": failed, "reason": reason}
+        return urls
 
     async def get_lyrics(self, song_id):
         payload = {
