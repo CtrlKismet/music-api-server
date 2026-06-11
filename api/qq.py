@@ -625,6 +625,31 @@ class QQMusicAPI:
             "genre": info_dict.get("歌曲流派"),
         }
 
+    # Known VKey result codes (community-sourced, not officially documented)
+    VKEY_RESULT_MAP = {
+        0: "OK",
+        104003: "歌曲无版权或已下架",
+        104001: "需要付费/VIP",
+        104004: "地域限制",
+        100000: "参数错误",
+        104000: "歌曲不存在",
+        104005: "试听版本不可用",
+    }
+
+    @classmethod
+    def _vkey_reason(cls, vkey_data: dict) -> str:
+        """Extract a human-readable failure reason from a vkey response."""
+        try:
+            mi = vkey_data["req_1"]["data"]["midurlinfo"][0]
+            code = mi.get("result", "?")
+            tip = mi.get("tips", "")
+            msg = cls.VKEY_RESULT_MAP.get(code, f"未知错误 (code={code})")
+            if tip:
+                msg = f"{msg}: {tip}"
+            return msg
+        except Exception:
+            return "unknown"
+
     async def get_song_urls(self, song_mid):
         uin = Config.QQ_USER_CONFIG.get("uin", "0")
         guid = str(random.randint(1000000000, 9999999999))
