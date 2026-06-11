@@ -90,9 +90,11 @@ class QQMusicAPI:
 
     async def _get_request(self, url, params=None):
         try:
-            response = await self.client.get(
-                url, params=params, headers=self.headers, cookies=Config.QQ_USER_CONFIG
-            )
+            # Build cookie header from config
+            cookies = Config.QQ_USER_CONFIG
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
+            headers = {**self.headers, "Cookie": cookie_str}
+            response = await self.client.get(url, params=params, headers=headers)
             response.raise_for_status()
             text = response.text
             if text.startswith("callback("):
