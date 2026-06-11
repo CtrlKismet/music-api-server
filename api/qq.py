@@ -759,56 +759,244 @@ class QQMusicAPI:
             .get("list", [])
         )
 
-        try:
-            target_artist, target_song = [
-                x.strip().lower() for x in keyword.split(" - ", 1)
-            ]
-        except ValueError:
-            return {"error": "关键词格式不正确..."}
+        # If keyword is in "artist - song" format, do exact match
+        if " - " in keyword:
+            try:
+                target_artist, target_song = [
+                    x.strip().lower() for x in keyword.split(" - ", 1)
+                ]
+            except ValueError:
+                target_artist, target_song = "", keyword.strip().lower()
 
-        def find_exact_match(songs):
-            for song in songs:
-                result_song = song.get("name", "").lower()
-                result_artist = " / ".join(
-                    [s.get("name") for s in song.get("singer", [])]
-                ).lower()
-                if target_song in result_song and target_artist in result_artist:
-                    return song
-            return None
+            def find_exact_match(songs):
+                for song in songs:
+                    result_song = song.get("name", "").lower()
+                    result_artist = " / ".join(
+                        [s.get("name") for s in song.get("singer", [])]
+                    ).lower()
+                    if target_song in result_song and target_artist in result_artist:
+                        return song
+                return None
 
-        best_match_song = find_exact_match(song_list)
-        if not best_match_song:
-            return {"error": "未能找到精确匹配的歌曲"}
-        return await self.get_song_details(
-            song_mid=best_match_song.get("mid"), song_id=best_match_song.get("id")
-        )
+            best_match_song = find_exact_match(song_list)
+            if best_match_song:
+                return await self.get_song_details(
+                    song_mid=best_match_song.get("mid"), song_id=best_match_song.get("id")
+                )
+
+        # Generic keyword search — return all results
+        results = []
+        for s in song_list[:20]:
+            results.append({
+                "mid": s.get("mid"),
+                "songmid": s.get("mid"),
+                "title": s.get("name", s.get("songname", "")),
+                "songname": s.get("name", s.get("songname", "")),
+                "singer": s.get("singer", []),
+                "albumname": s.get("album", {}).get("name", "") if isinstance(s.get("album"), dict) else "",
+                "interval": s.get("interval", 0),
+                "album_pic": f"https://y.qq.com/music/photo_new/T002R300x300M000{s.get('album', {}).get('mid', '')}.jpg" if isinstance(s.get("album"), dict) else "",
+            })
+        return {"list": results}
+
+    async def get_user_playlists(self, uin: str = "") -> list:
+        """Fetch the user's QQ Music playlists via user_detail API.
+        Mirrors FeelUOwn's QQUserSchema: reads mydiss.list from
+        fcg_get_profile_homepage.fcg response.
+        """
+        if not uin:
+            uin = Config.QQ_USER_CONFIG.get("uin", "")
+        if not uin or uin == "YOUR_QQ_NUMBER_OR_UIN":
+            return []
+
+        url = "http://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg"
+        params = {"cid": 205360838, "reqfrom": 1, "userid": uin}
+        resp = await self._get_request(url, params=params)
+        if not resp or resp.get("code") != 0:
+            return []
+
+        data = resp.get("data", {})
+        creator = data.get("creator", {})
+        playlists = []
+
+        # Add "My Favorites" (mymusic)
+        mymusic = data.get("mymusic", [])
+        if mymusic:
+            fav = mymusic[0]
+            playlists.append({
+                "id": fav.get("id", ""),
+                "dirid": fav.get("id", ""),
+                "title": fav.get("title", "我喜欢"),
+                "cover": fav.get("picurl", ""),
+                "song_count": fav.get("num0", 0),
+                "creator": creator.get("nick", ""),
+                "type": "favorite",
+            })
+
+        # Add user playlists (mydiss.list)
+        mydiss = data.get("mydiss", {})
+        for item in mydiss.get("list", []):
+            # Parse song count from subtitle: "50首    0次播放    "
+            count = 0
+            sub = item.get("subtitle", "")
+            m = re.search(r'(\d+)首', sub)
+            if m:
+                count = int(m.group(1))
+            playlists.append({
+                "id": item.get("dissid", ""),
+                "title": item.get("title", ""),
+                "cover": item.get("picurl", ""),
+                "song_count": count,
+                "creator": creator.get("nick", ""),
+                "type": "playlist",
+            })
+        return playlists
 
     async def get_playlist_info(self, playlist_id: str) -> dict:
-        url = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg"
-        params = {
-            "id": playlist_id,
-            "tpl": "wk",
-            "format": "json",
-            "outCharset": "utf-8",
-        }
-        response = await self._get_request(url, params=params)
-        if not response or response.get("code", -1) != 0:
-            return {"error": "获取QQ音乐歌单详情失败。"}
-        cdlist = response.get("data", {}).get("cdlist", [])
-        if not cdlist:
-            return {"error": "未在响应中找到歌单数据。"}
-        playlist_data = cdlist[0]
-        playlist_name = playlist_data.get("dissname", "未知歌单")
-        song_list = playlist_data.get("songlist", [])
-        songs = [
-            {
-                "name": s.get("songname"),
-                "artist": "、".join([i.get("name") for i in s.get("singer", [])]),
-                "mid": s.get("songmid"),
-            }
-            for s in song_list
-        ]
-        return {"playlist_name": playlist_name, "songs": songs}
+        url = "http://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg"
+        base_params = {"type": "1", "utf8": "1", "disstid": playlist_id, "format": "json", "new_format": "1"}
+
+        # First request: get total count
+        resp = await self._get_request(url, params={**base_params, "song_begin": 0, "song_num": 1})
+        if not resp or resp.get("code", -1) != 0:
+            return {"error": "Failed to get playlist detail"}
+        cd = resp.get("cdlist", [])
+        if not cd:
+            return {"error": "No playlist data"}
+        total = cd[0].get("total_song_num", cd[0].get("songnum", 100))
+
+        # Second request: load all songs
+        resp = await self._get_request(url, params={**base_params, "song_begin": 0, "song_num": total})
+        if not resp or resp.get("code", -1) != 0:
+            return {"error": "Failed to get playlist detail"}
+        cd = resp.get("cdlist", [])
+        if not cd:
+            return {"error": "No playlist data"}
+        pl = cd[0]
+        songs = []
+        for s in pl.get("songlist", []):
+            # Parse album string: "{'id': 123, 'mid': 'xxx', ...}"
+            album_str = s.get("album", "{}")
+            album_mid = ""
+            try:
+                album_d = eval(album_str) if isinstance(album_str, str) else album_str
+                album_mid = album_d.get("mid", "")
+            except Exception:
+                pass
+            # Parse singer string
+            singer_str = s.get("singer", "[]")
+            singers = []
+            try:
+                singers = eval(singer_str) if isinstance(singer_str, str) else singer_str
+            except Exception:
+                pass
+            artist = "、".join([i.get("name", "") for i in singers])
+            cover = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg" if album_mid else ""
+            songs.append({
+                "name": s.get("songname", s.get("name", "")),
+                "artist": artist,
+                "mid": s.get("songmid", s.get("mid", "")),
+                "album": album_str if isinstance(album_str, str) else album_str.get("name", ""),
+                "cover": cover,
+                "interval": int(s.get("interval", 0)),
+            })
+        return {"playlist_name": pl.get("dissname", ""), "songs": songs}
+
+    async def get_favorite_songs(self, dirid: str) -> dict:
+        """Fetch all favorite songs (我喜欢) from QQ Music using dirid.
+        Auto-paginates to retrieve the complete list."""
+        uin = Config.QQ_USER_CONFIG.get("uin", "0")
+        url = "https://c.y.qq.com/fav/fcgi-bin/fcg_get_fav_song_list.fcg"
+
+        all_songs = []
+        page = 0
+        per_page = 200
+
+        try:
+            while True:
+                params = {"dirid": dirid, "num": per_page, "page": page, "loginUin": uin, "format": "json"}
+                resp = await self._get_request(url, params=params)
+                if not resp or resp.get("code") != 0:
+                    break
+                songlist = resp.get("data", {}).get("songlist", [])
+                if not songlist:
+                    break
+                for s in songlist:
+                    singers = s.get("singer", [])
+                    artist = "、".join([si.get("name", "") for si in singers]) if isinstance(singers, list) else ""
+                    album = s.get("album", {})
+                    album_mid = album.get("mid", "") if isinstance(album, dict) else ""
+                    cover = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg" if album_mid else ""
+                    all_songs.append({
+                        "name": s.get("songname", s.get("name", "")),
+                        "artist": artist,
+                        "mid": s.get("songmid", s.get("mid", "")),
+                        "album": album.get("name", "") if isinstance(album, dict) else "",
+                        "cover": cover,
+                        "interval": int(s.get("interval", 0)),
+                    })
+                if len(songlist) < per_page:
+                    break
+                page += 1
+
+            if all_songs:
+                return {"playlist_name": "我喜欢", "songs": all_songs}
+        except Exception:
+            pass
+
+        return await self._get_favorite_songs_fallback(dirid)
+
+    async def _get_favorite_songs_fallback(self, dirid: str) -> dict:
+        """Fallback: try playlist-info style endpoint with dirid.
+        Uses the same two-step approach as get_playlist_info to get all songs."""
+        url = "http://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg"
+        base_params = {"type": "1", "utf8": "1", "disstid": dirid, "format": "json", "new_format": "1"}
+        try:
+            # First request: get total count
+            resp = await self._get_request(url, params={**base_params, "song_begin": 0, "song_num": 1})
+            if not resp or resp.get("code", -1) != 0:
+                return {"playlist_name": "我喜欢", "songs": []}
+            cd = resp.get("cdlist", [])
+            if not cd:
+                return {"playlist_name": "我喜欢", "songs": []}
+            total = cd[0].get("total_song_num", cd[0].get("songnum", 200))
+
+            # Second request: load all songs
+            resp = await self._get_request(url, params={**base_params, "song_begin": 0, "song_num": total})
+            if not resp or resp.get("code", -1) != 0:
+                return {"playlist_name": "我喜欢", "songs": []}
+            cd = resp.get("cdlist", [])
+            if not cd:
+                return {"playlist_name": "我喜欢", "songs": []}
+            pl = cd[0]
+            songs = []
+            for s in pl.get("songlist", []):
+                album_str = s.get("album", "{}")
+                album_mid = ""
+                try:
+                    album_d = eval(album_str) if isinstance(album_str, str) else album_str
+                    album_mid = album_d.get("mid", "")
+                except Exception:
+                    pass
+                singer_str = s.get("singer", "[]")
+                singers = []
+                try:
+                    singers = eval(singer_str) if isinstance(singer_str, str) else singer_str
+                except Exception:
+                    pass
+                artist = "、".join([i.get("name", "") for i in singers])
+                cover = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg" if album_mid else ""
+                songs.append({
+                    "name": s.get("songname", s.get("name", "")),
+                    "artist": artist,
+                    "mid": s.get("songmid", s.get("mid", "")),
+                    "album": album_str if isinstance(album_str, str) else album_str.get("name", ""),
+                    "cover": cover,
+                    "interval": int(s.get("interval", 0)),
+                })
+            return {"playlist_name": pl.get("dissname", "我喜欢"), "songs": songs}
+        except Exception:
+            return {"playlist_name": "我喜欢", "songs": []}
 
     async def download_playlist_by_id(self, playlist_id: str, level: str):
         url = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg"
