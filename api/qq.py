@@ -179,6 +179,15 @@ class QQMusicAPI:
                 "https://isure.stream.qqmusic.qq.com/",
             )
             return quality, domain + purl
+        # Stash the raw response for diagnostics
+        setattr(self, f"_last_vkey_{quality}", vkey_data)
+        # Log full vkey response when the song has no playable URL
+        midurlinfo = vkey_data.get("req_1", {}).get("data", {}).get("midurlinfo", [{}])[0] if vkey_data else {}
+        print(
+            f"[QQ] no purl for mid={song_mid} quality={quality} "
+            f"uin={uin} purl={midurlinfo.get('purl', 'N/A')} "
+            f"vkey_full={json.dumps(vkey_data, ensure_ascii=False) if vkey_data else 'None'}"
+        )
         return quality, None
 
     async def _get_album_details(self, album_identifier: str) -> dict:
