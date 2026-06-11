@@ -103,6 +103,19 @@ async def index():
     return {"message": "全能音乐API服务器正在运行"}
 
 
+@app.get("/api/login-status")
+async def login_status():
+    """Check if QQ Music cookie is configured."""
+    qq = Config.QQ_USER_CONFIG
+    has_uin = bool(qq.get("uin") and qq["uin"] != "YOUR_QQ_NUMBER_OR_UIN")
+    has_key = bool(qq.get("qqmusic_key") and qq["qqmusic_key"] != "YOUR_QQMUSIC_KEY")
+    logged_in = has_uin and has_key
+    return {
+        "logged_in": logged_in,
+        "uin": qq.get("uin", "") if logged_in else "",
+    }
+
+
 # --- 在线音乐API路由 ---
 # 网易云日推歌单 (需强制 wyUserId)
 @app.get("/api/netease/daily_recommend", dependencies=[Depends(verify_api_key)])
