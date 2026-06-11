@@ -40,4 +40,7 @@ python-dateutil==2.9.0.post0
 six==1.17.0
 tomli==2.3.0
 tzlocal==5.3.1
-urllib3==2.5.0pycryptodome==3.23.0
+urllib3==2.5.0
+pycryptodome==3.23.0
+aiofiles==25.1.0
+socksio==1.0.0
