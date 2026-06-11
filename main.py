@@ -437,6 +437,22 @@ async def handle_netease_request(
     return {"code": 200, "message": "成功", "data": data}
 
 
+@app.get("/api/qq/playlists", dependencies=[Depends(verify_api_key)])
+async def handle_qq_playlists():
+    """Get user's QQ Music playlists."""
+    playlists = await qq_api.get_user_playlists()
+    return {"code": 200, "data": playlists}
+
+
+@app.get("/api/qq/favorites", dependencies=[Depends(verify_api_key)])
+async def handle_qq_favorites(dirid: str):
+    """Get favorite songs (我喜欢) from QQ Music."""
+    data = await qq_api.get_favorite_songs(dirid)
+    if data and "error" in data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=data["error"])
+    return {"code": 200, "data": data}
+
+
 @app.get("/api/qq", dependencies=[Depends(verify_api_key)])
 async def handle_qq_request(
     background_tasks: BackgroundTasks,
