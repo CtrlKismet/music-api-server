@@ -693,9 +693,20 @@ class QQMusicAPI:
 
     async def get_song_details(self, song_mid: str = None, song_id: int = None):
         resolved_ids = await self._resolve_song_ids(song_mid=song_mid, song_id=song_id)
-        if not resolved_ids or not resolved_ids.get("mid"):
+        # Fallback: if resolution fails but we have a mid, use it directly.
+        # _resolve_song_ids uses fcg_play_single_song.fcg which can fail
+        # for some songs even though the mid is valid.
+        if resolved_ids and resolved_ids.get("mid"):
+            final_mid = resolved_ids.get("mid")
+            final_id = resolved_ids.get("id")
+        elif song_mid:
+            final_mid = song_mid
+            final_id = song_id
+        elif song_id:
+            # Have numeric id but no mid — can't proceed without mid
             return {"error": "无法解析到有效的歌曲信息。"}
-        final_mid, final_id = resolved_ids.get("mid"), resolved_ids.get("id")
+        else:
+            return {"error": "无法解析到有效的歌曲信息。"}
 
         info_task = self.get_song_info(final_mid)
         urls_task = self.get_song_urls(final_mid)
@@ -708,6 +719,13 @@ class QQMusicAPI:
         )
         if not info:
             return {"error": "获取详细信息失败。"}
+
+        if not urls:
+            print(
+                f"[QQ] no playable URL for mid={final_mid} id={final_id} "
+                f"title={info.get('name', '?')} artist={info.get('artist', '?')} "
+                f"info={json.dumps(info, ensure_ascii=False)}"
+            )
 
         if self.local_api and Config.DOWNLOADS_ENABLED:
             asyncio.create_task(
